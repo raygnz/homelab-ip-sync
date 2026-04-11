@@ -1,0 +1,35 @@
+
+# Terraform
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+*.tfvars
+terraform/environments/homelab/homelab.tfvars   # Use homelab.tfvars.example
+# State is stored in Azure Blob (sthomelabtfstate/tfstate/homelab-k3s/terraform.tfstate)
+# Never commit state files — they contain sensitive resource IDs
+
+# Secrets — never commit
+**/secrets.yml
+**/secret.yml
+**/.vault_pass
+ansible/vault_password
+kubeconfig/
+kubeconfig/*.yaml
+
+# Packer build artifacts
+packer/*/manifest.json
+packer/*/packer_cache/
+
+# Ansible retry files
+*.retry
+
+# macOS
+.DS_Store
+
+# VS Code
+.vscode/settings.json
+
+# Sealed secrets master key backup — store in Bitwarden, not Git
+sealed-secrets-master-key.yaml
