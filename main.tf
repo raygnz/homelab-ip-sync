@@ -119,7 +119,7 @@ resource "azurerm_linux_function_app" "func" {
 // Role Assignment for the Function App managed identity on the target storage account
 resource "azurerm_role_assignment" "target_storage_network_contrib" {
   scope                = data.azurerm_storage_account.target.id
-  role_definition_name = "Storage Account Network Contributor"
+  role_definition_name = "Storage Account Network Rules Contributor"
   principal_id         = azurerm_linux_function_app.func.identity[0].principal_id
 }
 
