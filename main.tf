@@ -4,6 +4,13 @@ resource "azurerm_resource_group" "rg" {
   location = var.primary_location
 }
 
+locals {
+  target_storage_account_resource_group_name = coalesce(
+    var.target_storage_account_resource_group_name,
+    azurerm_resource_group.rg.name
+  )
+}
+
 // Random suffix for unique storage account name
 resource "random_string" "suffix" {
   length  = 10
@@ -25,7 +32,7 @@ resource "azurerm_storage_account" "func_sa" {
 // Storage Container for Function App code
 resource "azurerm_storage_container" "func_container" {
   name                  = "function-releases"
-  storage_account_name  = azurerm_storage_account.func_sa.name
+  storage_account_id    = azurerm_storage_account.func_sa.id
   container_access_type = "private"
 }
 
@@ -38,45 +45,40 @@ resource "azurerm_service_plan" "plan" {
   sku_name            = "Y1"
 }
 
-// Create an Azure AD Application for the Function App
-resource "azuread_application" "app" {
-  display_name = "${var.application_name}-${var.environment_name}-app"
-}
-
-// Create a Service Principal for the Azure AD Application
-resource "azuread_service_principal" "sp" {
-  client_id = azuread_application.app.client_id
-}
-
-// Create a Service Principal Password for the Azure AD Application
-resource "azuread_service_principal_password" "sp_secret" {
-  service_principal_id = azuread_service_principal.sp.id
-}
-
-// Role Assignment for Storage Account Network Contributor
-resource "azurerm_role_assignment" "storage_network_contrib" {
-  scope                = azurerm_storage_account.func_sa.id
-  role_definition_name = "Storage Account Network Contributor"
-  principal_id         = azuread_service_principal.sp.id
-}
-
 // key vault data source to retrieve secrets for the Function App
 data "azurerm_key_vault" "bootstrap" {
-  name                = "kv-homelab-backend-prod"
-  resource_group_name = "rg-homelab-backend-prod"
+  name                = var.bootstrap_key_vault_name
+  resource_group_name = var.bootstrap_key_vault_resource_group_name
 }
 
 // Retrieve Cloudflare API token from Key Vault
 data "azurerm_key_vault_secret" "cloudflare_token" {
-  name         = "cloudflare-api-token"
+  name         = var.cloudflare_api_token_secret_name
   key_vault_id = data.azurerm_key_vault.bootstrap.id
 }
 
-// Role Assignment for Function App to read secrets from Key Vault
-resource "azurerm_role_assignment" "function_kv_reader" {
-  scope                = data.azurerm_key_vault.bootstrap.id
-  role_definition_name = "Key Vault Secrets User"
-  principal_id         = azurerm_linux_function_app.func.identity[0].principal_id
+// Target storage account whose firewall rules will be managed by the function
+data "azurerm_storage_account" "target" {
+  name                = var.target_storage_account_name
+  resource_group_name = local.target_storage_account_resource_group_name
+}
+
+// Shared-access signature for the deployment package
+data "azurerm_storage_account_blob_container_sas" "function_package" {
+  connection_string = azurerm_storage_account.func_sa.primary_connection_string
+  container_name    = azurerm_storage_container.func_container.name
+  https_only        = true
+  start             = timestamp()
+  expiry            = timeadd(timestamp(), "8760h")
+
+  permissions {
+    read   = true
+    add    = false
+    create = false
+    write  = false
+    delete = false
+    list   = false
+  }
 }
 
 // Function App
@@ -96,12 +98,9 @@ resource "azurerm_linux_function_app" "func" {
   }
 
   app_settings = {
-    "TENANT_ID"       = var.tenant_id
-    "CLIENT_ID"       = azuread_application.app.client_id
-    "CLIENT_SECRET"   = azuread_service_principal_password.sp_secret.value
-    "SUBSCRIPTION_ID" = var.subscription_id
-    "RESOURCE_GROUP"  = azurerm_resource_group.rg.name
-    "STORAGE_ACCOUNT" = azurerm_storage_account.func_sa.name
+    "SUBSCRIPTION_ID"        = var.subscription_id
+    "TARGET_RESOURCE_GROUP"  = local.target_storage_account_resource_group_name
+    "TARGET_STORAGE_ACCOUNT" = data.azurerm_storage_account.target.name
 
     // Cloudflare
     "CF_ZONE_ID"   = var.cloudflare_zone_id
@@ -109,12 +108,19 @@ resource "azurerm_linux_function_app" "func" {
     "CF_API_TOKEN" = data.azurerm_key_vault_secret.cloudflare_token.value
 
     "FUNCTIONS_WORKER_RUNTIME" = "python"
-    "WEBSITE_RUN_FROM_PACKAGE" = "1"
+    "WEBSITE_RUN_FROM_PACKAGE" = "${azurerm_storage_blob.function_zip.url}${data.azurerm_storage_account_blob_container_sas.function_package.sas}"
   }
 
   identity {
     type = "SystemAssigned"
   }
+}
+
+// Role Assignment for the Function App managed identity on the target storage account
+resource "azurerm_role_assignment" "target_storage_network_contrib" {
+  scope                = data.azurerm_storage_account.target.id
+  role_definition_name = "Storage Account Network Contributor"
+  principal_id         = azurerm_linux_function_app.func.identity[0].principal_id
 }
 
 // Archive Function App code
@@ -131,22 +137,4 @@ resource "azurerm_storage_blob" "function_zip" {
   storage_container_name = azurerm_storage_container.func_container.name
   type                   = "Block"
   source                 = data.archive_file.function_zip.output_path
-}
-
-// Deploy Function App from blob (slot)
-resource "azurerm_linux_function_app_slot" "deploy" {
-  name                       = "production"
-  function_app_id            = azurerm_linux_function_app.func.id
-  storage_account_name       = azurerm_storage_account.func_sa.name
-  storage_account_access_key = azurerm_storage_account.func_sa.primary_access_key
-
-  site_config {
-    application_stack {
-      python_version = "3.10"
-    }
-  }
-  // App settings for the deployment slot
-  app_settings = {
-    "WEBSITE_RUN_FROM_PACKAGE" = azurerm_storage_blob.function_zip.url
-  }
 }

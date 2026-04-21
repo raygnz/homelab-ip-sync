@@ -28,6 +28,9 @@ packer/*/packer_cache/
 # macOS
 .DS_Store
 
+# Azure Functions build artifacts
+function.zip
+
 # VS Code
 .vscode/settings.json
 
