@@ -122,14 +122,14 @@ resource "azurerm_linux_function_app" "func" {
 resource "azurerm_role_assignment" "target_storage_network_contrib" {
   for_each             = data.azurerm_storage_account.target
   scope                = each.value.id
-  role_definition_name = "Storage Account Network Rules Contributor"
+  role_definition_name = "SA KV Network Rules Contributor"
   principal_id         = azurerm_linux_function_app.func.identity[0].principal_id
 }
 
 // Role Assignment for the Function App managed identity on the target Key Vault
 resource "azurerm_role_assignment" "target_keyvault_network_contrib" {
   scope                = data.azurerm_key_vault.target.id
-  role_definition_name = "Key Vault Network Contributor"
+  role_definition_name = "SA KV Network Rules Contributor"
   principal_id         = azurerm_linux_function_app.func.identity[0].principal_id
 }
 
