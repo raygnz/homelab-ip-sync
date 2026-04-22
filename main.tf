@@ -65,9 +65,9 @@ data "azurerm_key_vault" "target" {
 
 // Target storage account whose firewall rules will be managed by the function
 data "azurerm_storage_account" "target" {
-  for_each            = toset(var.target_storage_account_names)
-  name                = each.value
-  resource_group_name = local.target_storage_account_resource_group_name
+  for_each            = var.target_storage_accounts
+  name                = each.key
+  resource_group_name = each.value
 }
 
 // Shared-access signature for the deployment package
@@ -107,7 +107,7 @@ resource "azurerm_linux_function_app" "func" {
   app_settings = {
     "SUBSCRIPTION_ID"         = var.subscription_id
     "TARGET_RESOURCE_GROUP"   = local.target_storage_account_resource_group_name
-    "TARGET_STORAGE_ACCOUNTS" = join(",", var.target_storage_account_names)
+    "TARGET_STORAGE_ACCOUNTS" = join(",", keys(var.target_storage_accounts))
     "TARGET_KEY_VAULT"        = var.target_key_vault_name
     "TARGET_KEY_VAULT_RG"     = var.target_key_vault_resource_group_name
 

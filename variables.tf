@@ -19,15 +19,9 @@ variable "subscription_id" {
   description = "Subscription ID for the Azure subscription"
 }
 
-variable "target_storage_account_names" {
-  type        = list(string)
-  description = "Name of the existing Azure Storage Account whose firewall rules should be synced to the Cloudflare DNS record IP"
-}
-
-variable "target_storage_account_resource_group_names" {
-  type        = list(string)
-  description = "Resource group containing the target storage account; defaults to the resource group created by this module when null"
-  default     = null
+variable "target_storage_accounts" {
+  type        = map(string)
+  description = "Map of storage account names to their resource group names"
 }
 
 variable "target_key_vault_name" {

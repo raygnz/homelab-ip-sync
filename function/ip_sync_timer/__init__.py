@@ -1,5 +1,6 @@
 import logging
 import os
+import json
 import azure.functions as func
 import requests
 from azure.identity import DefaultAzureCredential
@@ -34,10 +35,13 @@ def main(mytimer: func.TimerRequest) -> None:
     cf_record_id = os.environ["CF_RECORD_ID"]
     cf_api_token = os.environ["CF_API_TOKEN"]
 
-    # Get storage accounts and key vault from env
-    storage_accounts = os.environ.get("TARGET_STORAGE_ACCOUNTS", "")
-    storage_accounts = [s.strip() for s in storage_accounts.split(",") if s.strip()]
-    storage_rg = os.environ.get("TARGET_RESOURCE_GROUP")
+    # Get storage accounts (map of name: resource_group) and key vault from env
+    storage_accounts_json = os.environ.get("TARGET_STORAGE_ACCOUNTS", "{}")
+    try:
+        storage_accounts = json.loads(storage_accounts_json)
+    except Exception as e:
+        logging.error(f"Failed to parse TARGET_STORAGE_ACCOUNTS: {e}")
+        storage_accounts = {}
     key_vault_name = os.environ.get("TARGET_KEY_VAULT")
     key_vault_rg = os.environ.get("TARGET_KEY_VAULT_RG")
 
@@ -64,9 +68,9 @@ def main(mytimer: func.TimerRequest) -> None:
 
     # --- Update all storage accounts ---
     storage_client = StorageManagementClient(credential, subscription_id)
-    for sa_name in storage_accounts:
+    for sa_name, sa_rg in storage_accounts.items():
         try:
-            sa = storage_client.storage_accounts.get_properties(storage_rg, sa_name)
+            sa = storage_client.storage_accounts.get_properties(sa_rg, sa_name)
             network_rule_set = sa.network_rule_set or NetworkRuleSet(default_action="Deny", bypass="AzureServices")
             rules = network_rule_set.ip_rules or []
             tags = dict(sa.tags or {})
@@ -74,7 +78,7 @@ def main(mytimer: func.TimerRequest) -> None:
             updated_ip_rules = _build_updated_ip_rules(rules, previous_managed_ip, resolved_ip)
             tags[MANAGED_IP_TAG_NAME] = resolved_ip
             storage_client.storage_accounts.update(
-                storage_rg,
+                sa_rg,
                 sa_name,
                 StorageAccountUpdateParameters(
                     tags=tags,
@@ -88,9 +92,9 @@ def main(mytimer: func.TimerRequest) -> None:
                     )
                 ),
             )
-            logging.info(f"Updated firewall IP rules for storage account {sa_name}")
+            logging.info(f"Updated firewall IP rules for storage account {sa_name} in {sa_rg}")
         except Exception as e:
-            logging.error(f"Failed to update storage account {sa_name}: {e}")
+            logging.error(f"Failed to update storage account {sa_name} in {sa_rg}: {e}")
 
     # --- Update Key Vault network rules ---
     if key_vault_name and key_vault_rg:
