@@ -57,9 +57,16 @@ data "azurerm_key_vault_secret" "cloudflare_token" {
   key_vault_id = data.azurerm_key_vault.bootstrap.id
 }
 
+// Data source for the target Key Vault whose firewall rules will be managed by the function
+data "azurerm_key_vault" "target" {
+  name                = var.target_key_vault_name
+  resource_group_name = var.target_key_vault_resource_group_name
+}
+
 // Target storage account whose firewall rules will be managed by the function
 data "azurerm_storage_account" "target" {
-  name                = var.target_storage_account_name
+  for_each            = toset(var.target_storage_account_names)
+  name                = each.value
   resource_group_name = local.target_storage_account_resource_group_name
 }
 
@@ -98,9 +105,11 @@ resource "azurerm_linux_function_app" "func" {
   }
 
   app_settings = {
-    "SUBSCRIPTION_ID"        = var.subscription_id
-    "TARGET_RESOURCE_GROUP"  = local.target_storage_account_resource_group_name
-    "TARGET_STORAGE_ACCOUNT" = data.azurerm_storage_account.target.name
+    "SUBSCRIPTION_ID"         = var.subscription_id
+    "TARGET_RESOURCE_GROUP"   = local.target_storage_account_resource_group_name
+    "TARGET_STORAGE_ACCOUNTS" = join(",", var.target_storage_account_names)
+    "TARGET_KEY_VAULT"        = var.target_key_vault_name
+    "TARGET_KEY_VAULT_RG"     = var.target_key_vault_resource_group_name
 
     // Cloudflare
     "CF_ZONE_ID"   = var.cloudflare_zone_id
@@ -118,8 +127,16 @@ resource "azurerm_linux_function_app" "func" {
 
 // Role Assignment for the Function App managed identity on the target storage account
 resource "azurerm_role_assignment" "target_storage_network_contrib" {
-  scope                = data.azurerm_storage_account.target.id
-  role_definition_name = "SA KV Network Rules Contributor"
+  for_each             = data.azurerm_storage_account.target
+  scope                = each.value.id
+  role_definition_name = "Storage Account Network Rules Contributor"
+  principal_id         = azurerm_linux_function_app.func.identity[0].principal_id
+}
+
+// Role Assignment for the Function App managed identity on the target Key Vault
+resource "azurerm_role_assignment" "target_keyvault_network_contrib" {
+  scope                = data.azurerm_key_vault.target.id
+  role_definition_name = "Key Vault Network Contributor"
   principal_id         = azurerm_linux_function_app.func.identity[0].principal_id
 }
 
