@@ -4,12 +4,6 @@ resource "azurerm_resource_group" "rg" {
   location = var.primary_location
 }
 
-locals {
-  target_storage_account_resource_group_name = coalesce(
-    var.target_storage_account_resource_group_names[0],
-    azurerm_resource_group.rg.name
-  )
-}
 
 // Random suffix for unique storage account name
 resource "random_string" "suffix" {
@@ -106,8 +100,7 @@ resource "azurerm_linux_function_app" "func" {
 
   app_settings = {
     "SUBSCRIPTION_ID"         = var.subscription_id
-    "TARGET_RESOURCE_GROUP"   = local.target_storage_account_resource_group_name
-    "TARGET_STORAGE_ACCOUNTS" = join(",", keys(var.target_storage_accounts))
+    "TARGET_STORAGE_ACCOUNTS" = jsonencode(var.target_storage_accounts)
     "TARGET_KEY_VAULT"        = var.target_key_vault_name
     "TARGET_KEY_VAULT_RG"     = var.target_key_vault_resource_group_name
 
