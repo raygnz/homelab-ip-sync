@@ -6,7 +6,7 @@ resource "azurerm_resource_group" "rg" {
 
 locals {
   target_storage_account_resource_group_name = coalesce(
-    var.target_storage_account_resource_group_name,
+    var.target_storage_account_resource_group_names[0],
     azurerm_resource_group.rg.name
   )
 }
