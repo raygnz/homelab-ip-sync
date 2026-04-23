@@ -19,5 +19,5 @@ output "primary_blob_endpoint" {
 }
 
 output "target_storage_account_ids" {
-  value = [for sa in data.azurerm_storage_account.target : sa.id]
+  value = [for sa in azurerm_storage_account.target : sa.id]
 }
