@@ -18,7 +18,6 @@ stages:
   - stage: Terraform
     displayName: "Deploy IP Sync Function"
     jobs:
-      - job: terraform
         displayName: "Terraform Apply"
         steps:
 
@@ -52,4 +51,37 @@ stages:
               provider: "azurerm"
               command: "apply"
               environmentServiceNameAzureRM: $(AZURE_SUBSCRIPTION)
+
+    - stage: Destroy
+      displayName: "Terraform Destroy"
+      dependsOn: []
+      jobs:
+        - job: terraform_destroy
+          displayName: "Terraform Destroy"
+          steps:
+            - task: TerraformInstaller@0
+              displayName: "Install Terraform"
+              inputs:
+                terraformVersion: "latest"
+            - task: TerraformTask@5
+              displayName: "Terraform Init"
+              inputs:
+                provider: "azurerm"
+                command: "init"
+                backendServiceArm: $(AZURE_SUBSCRIPTION)
+                backendAzureRmResourceGroupName: $(BACKEND_RG)
+                backendAzureRmStorageAccountName: $(BACKEND_SA)
+                backendAzureRmContainerName: "tfstate"
+                backendAzureRmKey: $(STATE_KEY)
+            - task: TerraformTask@5
+              displayName: "Terraform Destroy"
+              inputs:
+                provider: "azurerm"
+                command: "destroy"
+                environmentServiceNameAzureRM: $(AZURE_SUBSCRIPTION)
+                commandOptions: "-auto-approve"
+      approval:
+        - name: ManualApproval
+          type: Manual
+          instructions: "Approve to run Terraform Destroy. This will delete all managed resources."
               commandOptions: "-auto-approve tfplan"

@@ -58,10 +58,15 @@ data "azurerm_key_vault" "target" {
 }
 
 // Target storage account whose firewall rules will be managed by the function
-data "azurerm_storage_account" "target" {
-  for_each            = var.target_storage_accounts
-  name                = each.key
-  resource_group_name = each.value
+resource "azurerm_storage_account" "target" {
+  for_each                 = var.target_storage_accounts
+  name                     = each.key
+  resource_group_name      = each.value
+  location                 = azurerm_resource_group.rg.location
+  account_tier             = "Standard"
+  account_replication_type = "LRS"
+  account_kind             = "StorageV2"
+  min_tls_version          = "TLS1_2"
 }
 
 // Shared-access signature for the deployment package
@@ -120,7 +125,7 @@ resource "azurerm_linux_function_app" "func" {
 
 // Role Assignment for the Function App managed identity on the target storage account
 resource "azurerm_role_assignment" "target_storage_network_contrib" {
-  for_each             = data.azurerm_storage_account.target
+  for_each             = azurerm_storage_account.target
   scope                = each.value.id
   role_definition_name = "SA KV Network Rules Contributor"
   principal_id         = azurerm_linux_function_app.func.identity[0].principal_id
