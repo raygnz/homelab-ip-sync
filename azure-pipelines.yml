@@ -72,30 +72,33 @@ stages:
     displayName: "Terraform Destroy"
     dependsOn: []
     jobs:
-      - job: terraform_destroy
+      - deployment: terraform_destroy
         displayName: "Terraform Destroy"
         environment: ManualApprovalEnv
-        steps:
-          - task: TerraformInstaller@0
-            displayName: "Install Terraform"
-            inputs:
-              terraformVersion: "latest"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: TerraformInstaller@0
+                  displayName: "Install Terraform"
+                  inputs:
+                    terraformVersion: "latest"
 
-          - task: TerraformTask@5
-            displayName: "Terraform Init"
-            inputs:
-              provider: "azurerm"
-              command: "init"
-              backendServiceArm: $(AZURE_SUBSCRIPTION)
-              backendAzureRmResourceGroupName: $(BACKEND_RG)
-              backendAzureRmStorageAccountName: $(BACKEND_SA)
-              backendAzureRmContainerName: "tfstate"
-              backendAzureRmKey: $(STATE_KEY)
+                - task: TerraformTask@5
+                  displayName: "Terraform Init"
+                  inputs:
+                    provider: "azurerm"
+                    command: "init"
+                    backendServiceArm: $(AZURE_SUBSCRIPTION)
+                    backendAzureRmResourceGroupName: $(BACKEND_RG)
+                    backendAzureRmStorageAccountName: $(BACKEND_SA)
+                    backendAzureRmContainerName: "tfstate"
+                    backendAzureRmKey: $(STATE_KEY)
 
-          - task: TerraformTask@5
-            displayName: "Terraform Destroy"
-            inputs:
-              provider: "azurerm"
-              command: "destroy"
-              environmentServiceNameAzureRM: $(AZURE_SUBSCRIPTION)
-              commandOptions: "-auto-approve"
+                - task: TerraformTask@5
+                  displayName: "Terraform Destroy"
+                  inputs:
+                    provider: "azurerm"
+                    command: "destroy"
+                    environmentServiceNameAzureRM: $(AZURE_SUBSCRIPTION)
+                    commandOptions: "-auto-approve"
