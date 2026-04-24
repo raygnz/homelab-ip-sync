@@ -116,6 +116,7 @@ resource "azurerm_linux_function_app" "func" {
 
     "FUNCTIONS_WORKER_RUNTIME" = "python"
     "WEBSITE_RUN_FROM_PACKAGE" = "${azurerm_storage_blob.function_zip.url}${data.azurerm_storage_account_blob_container_sas.function_package.sas}"
+    "SCM_DO_BUILD_DURING_DEPLOYMENT" = "true"
   }
 
   identity {
