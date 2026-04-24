@@ -1,7 +1,4 @@
-trigger:
-  branches:
-    include:
-      - main
+trigger: none
 
 pool:
   name: self-hosted-nuc
@@ -36,6 +33,26 @@ stages:
               backendAzureRmStorageAccountName: $(BACKEND_SA)
               backendAzureRmContainerName: "tfstate"
               backendAzureRmKey: $(STATE_KEY)
+
+
+          - script: |
+              cd function
+              zip -r ../function.zip . -x '*.DS_Store' -x '__MACOSX' -x '._*'
+            displayName: 'Package Function App'
+
+          - task: AzureCLI@2
+            displayName: 'Upload function.zip to blob'
+            inputs:
+              azureSubscription: $(AZURE_SUBSCRIPTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az storage blob upload \
+                  --account-name $(BACKEND_SA) \
+                  --container-name function-releases \
+                  --name function.zip \
+                  --file ../function.zip \
+                  --overwrite
 
           - task: TerraformTask@5
             displayName: "Terraform Plan"
