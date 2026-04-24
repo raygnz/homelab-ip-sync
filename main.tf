@@ -4,17 +4,9 @@ resource "azurerm_resource_group" "rg" {
   location = var.primary_location
 }
 
-
-// Random suffix for unique storage account name
-resource "random_string" "suffix" {
-  length  = 10
-  upper   = false
-  special = false
-}
-
 // Storage Account for Function App
 resource "azurerm_storage_account" "func_sa" {
-  name                     = "st${random_string.suffix.result}"
+  name                     = "sa-${var.subscription_name}-${var.application_name}-${var.environment_name}"
   resource_group_name      = azurerm_resource_group.rg.name
   location                 = azurerm_resource_group.rg.location
   account_tier             = "Standard"
@@ -36,7 +28,7 @@ resource "azurerm_service_plan" "plan" {
   location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
   os_type             = "Linux"
-  sku_name            = "Y1"
+  sku_name            = "FC1"
 }
 
 // key vault data source to retrieve secrets for the Function App
@@ -58,15 +50,11 @@ data "azurerm_key_vault" "target" {
 }
 
 // Target storage account whose firewall rules will be managed by the function
-resource "azurerm_storage_account" "target" {
-  for_each                 = var.target_storage_accounts
-  name                     = each.key
-  resource_group_name      = each.value
-  location                 = azurerm_resource_group.rg.location
-  account_tier             = "Standard"
-  account_replication_type = "LRS"
-  account_kind             = "StorageV2"
-  min_tls_version          = "TLS1_2"
+data "azurerm_storage_account" "target" {
+  for_each            = var.target_storage_accounts
+  name                = each.key
+  resource_group_name = each.value
+  location            = azurerm_resource_group.rg.location
 }
 
 // Shared-access signature for the deployment package
@@ -101,6 +89,17 @@ resource "azurerm_linux_function_app" "func" {
     application_stack {
       python_version = "3.10"
     }
+    ip_restriction {
+      ip_address = var.home_ip
+      action     = "Allow"
+      name       = "AllowHomeIP"
+      priority   = 100
+    }
+    ip_restriction {
+      action   = "Deny"
+      name     = "DenyAll"
+      priority = 200
+    }
   }
 
   app_settings = {
@@ -114,8 +113,8 @@ resource "azurerm_linux_function_app" "func" {
     "CF_RECORD_ID" = var.cloudflare_record_id
     "CF_API_TOKEN" = data.azurerm_key_vault_secret.cloudflare_token.value
 
-    "FUNCTIONS_WORKER_RUNTIME" = "python"
-    "WEBSITE_RUN_FROM_PACKAGE" = "${azurerm_storage_blob.function_zip.url}${data.azurerm_storage_account_blob_container_sas.function_package.sas}"
+    "FUNCTIONS_WORKER_RUNTIME"       = "python"
+    "WEBSITE_RUN_FROM_PACKAGE"       = "${azurerm_storage_blob.function_zip.url}${data.azurerm_storage_account_blob_container_sas.function_package.sas}"
     "SCM_DO_BUILD_DURING_DEPLOYMENT" = "true"
   }
 

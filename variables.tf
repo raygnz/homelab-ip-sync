@@ -1,3 +1,7 @@
+variable "subscription_name" {
+  type        = string
+  description = "Prefix for all resource names"
+}
 variable "application_name" {
   type        = string
   description = "Application name for resource naming"
@@ -18,12 +22,10 @@ variable "subscription_id" {
   type        = string
   description = "Subscription ID for the Azure subscription"
 }
-
 variable "target_storage_accounts" {
   type        = map(string)
   description = "Map of storage account names to their resource group names"
 }
-
 variable "target_key_vault_name" {
   type        = string
   description = "Name of the Key Vault to manage"
@@ -32,32 +34,29 @@ variable "target_key_vault_resource_group_name" {
   type        = string
   description = "Resource group of the Key Vault"
 }
-
 variable "bootstrap_key_vault_name" {
   type        = string
   description = "Name of the Key Vault containing the Cloudflare API token secret"
 }
-
 variable "bootstrap_key_vault_resource_group_name" {
   type        = string
   description = "Resource group containing the bootstrap Key Vault"
 }
-
 variable "cloudflare_api_token_secret_name" {
   type        = string
   description = "Name of the Key Vault secret storing the Cloudflare API token"
   default     = "cloudflare-api-token"
 }
-
 // Cloudflare
 variable "cloudflare_zone_id" {
   type        = string
   description = "Cloudflare Zone ID for the DNS zone"
 }
-
 variable "cloudflare_record_id" {
   type        = string
   description = "Cloudflare Record ID for the DNS record"
 }
-
-
+variable "home_ip" {
+  type        = string
+  description = "Home IP address for IP restriction"
+}

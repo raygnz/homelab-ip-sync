@@ -8,6 +8,8 @@ from azure.mgmt.storage import StorageManagementClient
 from azure.mgmt.storage.models import IPRule, NetworkRuleSet, StorageAccountUpdateParameters
 from azure.mgmt.keyvault import KeyVaultManagementClient
 from azure.mgmt.keyvault.models import NetworkRuleSet as KVNetworkRuleSet, VaultPatchParameters
+from azure.mgmt.web import WebSiteManagementClient
+from azure.mgmt.web.models import IpSecurityRestriction
 
 MANAGED_IP_TAG_NAME = "homelab-ip-sync-last-ip"
 
@@ -120,3 +122,39 @@ def main(mytimer: func.TimerRequest) -> None:
             logging.info(f"Updated firewall IP rules for Key Vault {key_vault_name}")
         except Exception as e:
             logging.error(f"Failed to update Key Vault {key_vault_name}: {e}")
+
+    # --- Update Function App IP restrictions ---
+    try:
+        funcapp_name = os.environ.get("WEBSITE_SITE_NAME") or os.environ.get("FUNCTION_APP_NAME")
+        funcapp_rg = os.environ.get("WEBSITE_RESOURCE_GROUP") or os.environ.get("FUNCTION_APP_RESOURCE_GROUP")
+        if not funcapp_name or not funcapp_rg:
+            logging.warning("Function App name or resource group not set in environment; skipping Function App IP update.")
+            return
+        web_client = WebSiteManagementClient(credential, subscription_id)
+        site_config = web_client.web_apps.get_configuration(funcapp_rg, funcapp_name)
+        # Remove any previous managed IP restriction
+        ip_restrictions = [r for r in getattr(site_config, 'ip_security_restrictions', []) if getattr(r, 'name', None) != 'AllowHomeIP']
+        # Add the new managed IP restriction
+        ip_restrictions.insert(0, IpSecurityRestriction(
+            ip_address=resolved_ip,
+            action="Allow",
+            priority=100,
+            name="AllowHomeIP",
+            tag=None,
+            description="Managed by homelab-ip-sync",
+        ))
+        # Add a DenyAll rule if not present
+        if not any(r.action == "Deny" for r in ip_restrictions):
+            ip_restrictions.append(IpSecurityRestriction(
+                ip_address=None,
+                action="Deny",
+                priority=200,
+                name="DenyAll",
+                tag=None,
+                description="Deny all except managed IP",
+            ))
+        site_config.ip_security_restrictions = ip_restrictions
+        web_client.web_apps.update_configuration(funcapp_rg, funcapp_name, site_config)
+        logging.info(f"Updated Function App IP restrictions for {funcapp_name} in {funcapp_rg}")
+    except Exception as e:
+        logging.error(f"Failed to update Function App IP restrictions: {e}")
