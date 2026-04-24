@@ -40,51 +40,51 @@ stages:
               zip -r ../function.zip . -x '*.DS_Store' -x '__MACOSX' -x '._*'
             displayName: 'Package Function App'
 
-          - task: AzureCLI@2
-            displayName: 'Upload function.zip to blob'
-            inputs:
-              azureSubscription: $(AZURE_SUBSCRIPTION)
-              scriptType: bash
-              scriptLocation: inlineScript
-              inlineScript: |
-                az storage blob upload \
-                  --account-name $(BACKEND_SA) \
-                  --container-name function-releases \
-                  --name function.zip \
-                  --file ../function.zip \
-                  --overwrite
+          stages:
+            - stage: Terraform
+              displayName: "Deploy IP Sync Function"
+              jobs:
+                - job: terraform_apply
+                  displayName: "Terraform Apply"
+                  steps:
+                    - task: TerraformInstaller@0
+                      displayName: "Install Terraform"
+                      inputs:
+                        terraformVersion: "latest"
 
-          - task: TerraformTask@5
-            displayName: "Terraform Plan"
-            inputs:
-              provider: "azurerm"
-              command: "plan"
-              environmentServiceNameAzureRM: $(AZURE_SUBSCRIPTION)
-              commandOptions: "-out=tfplan"
+                    - script: |
+                        cd function
+                        zip -r ../function.zip . -x '*.DS_Store' -x '__MACOSX' -x '._*'
+                      displayName: 'Package Function App'
 
-          - task: TerraformTask@5
-            displayName: "Terraform Apply"
-            inputs:
-              provider: "azurerm"
-              command: "apply"
-              environmentServiceNameAzureRM: $(AZURE_SUBSCRIPTION)
+                    - task: AzureCLI@2
+                      displayName: 'Upload function.zip to blob'
+                      inputs:
+                        azureSubscription: $(AZURE_SUBSCRIPTION)
+                        scriptType: bash
+                        scriptLocation: inlineScript
+                        inlineScript: |
+                          az storage blob upload \
+                            --account-name $(BACKEND_SA) \
+                            --container-name function-releases \
+                            --name function.zip \
+                            --file ../function.zip \
+                            --overwrite
 
-    - stage: Destroy
-      displayName: "Terraform Destroy"
-      dependsOn: []
-      jobs:
-        - job: terraform_destroy
-          displayName: "Terraform Destroy"
-          steps:
-            - task: TerraformInstaller@0
-              displayName: "Install Terraform"
-              inputs:
-                terraformVersion: "latest"
-            - task: TerraformTask@5
-              displayName: "Terraform Init"
-              inputs:
-                provider: "azurerm"
-                command: "init"
+                    - task: TerraformTask@5
+                      displayName: "Terraform Plan"
+                      inputs:
+                        provider: "azurerm"
+                        command: "plan"
+                        environmentServiceNameAzureRM: $(AZURE_SUBSCRIPTION)
+                        commandOptions: "-out=tfplan"
+
+                    - task: TerraformTask@5
+                      displayName: "Terraform Apply"
+                      inputs:
+                        provider: "azurerm"
+                        command: "apply"
+                        environmentServiceNameAzureRM: $(AZURE_SUBSCRIPTION)
                 backendServiceArm: $(AZURE_SUBSCRIPTION)
                 backendAzureRmResourceGroupName: $(BACKEND_RG)
                 backendAzureRmStorageAccountName: $(BACKEND_SA)
