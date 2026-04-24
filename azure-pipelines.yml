@@ -8,7 +8,7 @@ pool:
 variables:
   AZURE_SUBSCRIPTION: "AzureServiceConnection-SP"
   BACKEND_RG: "rg-homelab-backend-prod"
-  BACKEND_SA: "stquht6a84zm"
+  BACKEND_SA: "st09w8ns1szr"
   STATE_KEY: "homelab-ip-sync.tfstate"
 
 stages:
