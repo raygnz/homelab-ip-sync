@@ -8,7 +8,8 @@ pool:
 variables:
   AZURE_SUBSCRIPTION: "AzureServiceConnection-SP"
   BACKEND_RG: "rg-homelab-backend-prod"
-  BACKEND_SA: "st09w8ns1szr"
+  BACKEND_SA: "stquht6a84zm"
+  FUNCTION_SA: "st09w8ns1szr"
   STATE_KEY: "homelab-ip-sync.tfstate"
 
 stages:
@@ -47,7 +48,7 @@ stages:
               scriptLocation: inlineScript
               inlineScript: |
                 az storage blob upload \
-                  --account-name $(BACKEND_SA) \
+                  --account-name $(FUNCTION_SA) \
                   --container-name function-releases \
                   --name function.zip \
                   --file function.zip \
