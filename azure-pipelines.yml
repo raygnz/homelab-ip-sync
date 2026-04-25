@@ -8,16 +8,17 @@ pool:
 variables:
   AZURE_SUBSCRIPTION: "AzureServiceConnection-SP"
   BACKEND_RG: "rg-homelab-backend-prod"
-  BACKEND_SA: "stquht6a84zm"
-  FUNCTION_SA: "st09w8ns1szr"
+  BACKEND_SA: "sahomelabbackendprod"
+  FUNCTION_SA: "sahomelabipsyncprod"
   STATE_KEY: "homelab-ip-sync.tfstate"
 
 stages:
   - stage: Deploy
     displayName: "Deploy IP Sync Function"
     jobs:
-      - job: terraform_apply
-        displayName: "Terraform Apply"
+
+      - job: terraform_apply_1
+        displayName: "Terraform Apply (infra)"
         steps:
           - task: TerraformInstaller@0
             displayName: "Install Terraform"
@@ -25,7 +26,7 @@ stages:
               terraformVersion: "latest"
 
           - task: TerraformTask@5
-            displayName: "Terraform Init"
+            displayName: "Terraform Init (Upgrade Providers)"
             inputs:
               provider: "azurerm"
               command: "init"
@@ -34,7 +35,20 @@ stages:
               backendAzureRmStorageAccountName: $(BACKEND_SA)
               backendAzureRmContainerName: "tfstate"
               backendAzureRmKey: $(STATE_KEY)
+              commandOptions: "-upgrade"
 
+          - task: TerraformTask@5
+            displayName: "Terraform Apply (infra)"
+            inputs:
+              provider: "azurerm"
+              command: "apply"
+              environmentServiceNameAzureRM: $(AZURE_SUBSCRIPTION)
+              commandOptions: "-auto-approve"
+
+      - job: upload_and_apply_function
+        displayName: "Upload Function Zip and Apply"
+        dependsOn: terraform_apply_1
+        steps:
           - script: |
               cd function
               zip -r ../function.zip . -x '*.DS_Store' -x '__MACOSX' -x '._*'
@@ -55,19 +69,12 @@ stages:
                   --overwrite
 
           - task: TerraformTask@5
-            displayName: "Terraform Plan"
-            inputs:
-              provider: "azurerm"
-              command: "plan"
-              environmentServiceNameAzureRM: $(AZURE_SUBSCRIPTION)
-              commandOptions: "-out=tfplan"
-
-          - task: TerraformTask@5
-            displayName: "Terraform Apply"
+            displayName: "Terraform Apply (function app)"
             inputs:
               provider: "azurerm"
               command: "apply"
               environmentServiceNameAzureRM: $(AZURE_SUBSCRIPTION)
+              commandOptions: "-auto-approve"
 
   - stage: Destroy
     displayName: "Terraform Destroy"

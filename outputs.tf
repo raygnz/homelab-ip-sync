@@ -3,7 +3,7 @@ output "storage_account_name" {
 }
 
 output "function_app_name" {
-  value = azurerm_linux_function_app.func.name
+  value = azurerm_function_app_flex_consumption.func.name
 }
 
 output "resource_group_name" {
@@ -19,5 +19,8 @@ output "primary_blob_endpoint" {
 }
 
 output "target_storage_account_ids" {
-  value = [for sa in azurerm_storage_account.target : sa.id]
+  value = [
+    azurerm_storage_account.ipsync.id,
+    data.azurerm_storage_account.backend.id
+  ]
 }

@@ -1,6 +1,6 @@
-variable "subscription_name" {
+variable "storage_account_name" {
   type        = string
-  description = "Prefix for all resource names"
+  description = "Name of the storage account"
 }
 variable "application_name" {
   type        = string
@@ -59,4 +59,8 @@ variable "cloudflare_record_id" {
 variable "home_ip" {
   type        = string
   description = "Home IP address for IP restriction"
+}
+variable "pipeline_sp_object_id" {
+  type        = string
+  description = "Object ID of the pipeline service principal for role assignment"
 }
