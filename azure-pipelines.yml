@@ -48,9 +48,9 @@ stages:
               commandOptions: "-auto-approve"
               workingDirectory: "$(Build.SourcesDirectory)"
 
-          # Export Terraform output as a job output variable
           - task: AzureCLI@2
             name: exportOutputs
+            displayName: "Export Terraform Outputs"
             inputs:
               azureSubscription: $(AZURE_SUBSCRIPTION)
               scriptType: bash
@@ -62,14 +62,13 @@ stages:
                 echo "Exported function_app_name = $APP_NAME"
 
   # =========================================================
-  # Stage 2 — Deploy Function Code (remoteBuild)
+  # Stage 2 — Deploy Function Code
   # =========================================================
   - stage: DeployFunction
     displayName: "Deploy Function Code"
     dependsOn: Deploy
 
     variables:
-      # Convert job output → runtime variable
       function_app_name: $[
         stageDependencies.Deploy.terraform_apply.outputs['exportOutputs.function_app_name']
         ]
@@ -81,19 +80,25 @@ stages:
         steps:
 
           - script: |
-              cd $(Build.SourcesDirectory)/function
-              zip -r ../function-src.zip function_app.py host.json requirements.txt
-            displayName: "Package Function Source (decorator model root layout)"
-
-          - script: |
               echo "Resolved function_app_name = $(function_app_name)"
             displayName: "DEBUG — Show resolved app name"
 
-          - task: AzureFunctionApp@2
-            displayName: "Deploy via remoteBuild"
+          - script: |
+              curl -L https://github.com/Azure/azure-functions-core-tools/releases/download/4.0.6610/Azure.Functions.Cli.linux-x64.4.0.6610.zip -o /tmp/func.zip
+              unzip -o /tmp/func.zip -d /tmp/func-cli
+              chmod +x /tmp/func-cli/func
+              chmod +x /tmp/func-cli/gozip
+              echo "##vso[task.prependpath]/tmp/func-cli"
+            displayName: "Install Azure Functions Core Tools"
+
+          - task: AzureCLI@2
+            displayName: "Deploy via func CLI"
             inputs:
               azureSubscription: $(AZURE_SUBSCRIPTION)
-              appType: functionAppLinux
-              appName: "$(function_app_name)"
-              package: "$(Build.SourcesDirectory)/function-src.zip"
-              deploymentMethod: remoteBuild
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                cd $(Build.SourcesDirectory)/function
+
+                func azure functionapp publish "$(function_app_name)" \
+                  --python
