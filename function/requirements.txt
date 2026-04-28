@@ -1,6 +1,6 @@
-requests
 azure-functions
 azure-identity
 azure-mgmt-storage
 azure-mgmt-keyvault
 azure-mgmt-web
+requests

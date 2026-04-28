@@ -9,104 +9,91 @@ variables:
   AZURE_SUBSCRIPTION: "AzureServiceConnection-SP"
   BACKEND_RG: "rg-homelab-backend-prod"
   BACKEND_SA: "sahomelabbackendprod"
-  FUNCTION_SA: "sahomelabipsyncprod"
   STATE_KEY: "homelab-ip-sync.tfstate"
 
 stages:
+
+  # =========================================================
+  # Stage 1 — Terraform Infra
+  # =========================================================
   - stage: Deploy
-    displayName: "Deploy IP Sync Function"
+    displayName: "Deploy IP Sync Infrastructure"
     jobs:
 
-      - job: terraform_apply_1
-        displayName: "Terraform Apply (infra)"
+      - job: terraform_apply
+        displayName: "Terraform Apply"
         steps:
+
           - task: TerraformInstaller@0
-            displayName: "Install Terraform"
             inputs:
-              terraformVersion: "latest"
+              terraformVersion: latest
 
           - task: TerraformTask@5
-            displayName: "Terraform Init (Upgrade Providers)"
             inputs:
-              provider: "azurerm"
-              command: "init"
+              provider: azurerm
+              command: init
               backendServiceArm: $(AZURE_SUBSCRIPTION)
               backendAzureRmResourceGroupName: $(BACKEND_RG)
               backendAzureRmStorageAccountName: $(BACKEND_SA)
-              backendAzureRmContainerName: "tfstate"
+              backendAzureRmContainerName: tfstate
               backendAzureRmKey: $(STATE_KEY)
-              commandOptions: "-upgrade"
+              workingDirectory: "$(Build.SourcesDirectory)"
 
           - task: TerraformTask@5
-            displayName: "Terraform Apply (infra)"
             inputs:
-              provider: "azurerm"
-              command: "apply"
+              provider: azurerm
+              command: apply
+              backendServiceArm: $(AZURE_SUBSCRIPTION)
               environmentServiceNameAzureRM: $(AZURE_SUBSCRIPTION)
               commandOptions: "-auto-approve"
+              workingDirectory: "$(Build.SourcesDirectory)"
 
-      - job: upload_and_apply_function
-        displayName: "Upload Function Zip and Apply"
-        dependsOn: terraform_apply_1
-        steps:
-          - script: |
-              cd function
-              zip -r ../function.zip . -x '*.DS_Store' -x '__MACOSX' -x '._*'
-            displayName: "Package Function App"
-
+          # Export Terraform output as a job output variable
           - task: AzureCLI@2
-            displayName: "Upload function.zip to blob"
+            name: exportOutputs
             inputs:
               azureSubscription: $(AZURE_SUBSCRIPTION)
               scriptType: bash
               scriptLocation: inlineScript
+              workingDirectory: "$(Build.SourcesDirectory)"
               inlineScript: |
-                az storage blob upload \
-                  --account-name $(FUNCTION_SA) \
-                  --container-name function-releases \
-                  --name function.zip \
-                  --file function.zip \
-                  --overwrite
+                APP_NAME=$(terraform output -raw function_app_name)
+                echo "##vso[task.setvariable variable=function_app_name;isOutput=true]$APP_NAME"
+                echo "Exported function_app_name = $APP_NAME"
 
-          - task: TerraformTask@5
-            displayName: "Terraform Apply (function app)"
-            inputs:
-              provider: "azurerm"
-              command: "apply"
-              environmentServiceNameAzureRM: $(AZURE_SUBSCRIPTION)
-              commandOptions: "-auto-approve"
+  # =========================================================
+  # Stage 2 — Deploy Function Code (remoteBuild)
+  # =========================================================
+  - stage: DeployFunction
+    displayName: "Deploy Function Code"
+    dependsOn: Deploy
 
-  - stage: Destroy
-    displayName: "Terraform Destroy"
-    dependsOn: []
+    variables:
+      # Convert job output → runtime variable
+      function_app_name: $[
+        stageDependencies.Deploy.terraform_apply.outputs['exportOutputs.function_app_name']
+        ]
+
     jobs:
-      - deployment: terraform_destroy
-        displayName: "Terraform Destroy"
-        environment: ManualApprovalEnv
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - task: TerraformInstaller@0
-                  displayName: "Install Terraform"
-                  inputs:
-                    terraformVersion: "latest"
 
-                - task: TerraformTask@5
-                  displayName: "Terraform Init"
-                  inputs:
-                    provider: "azurerm"
-                    command: "init"
-                    backendServiceArm: $(AZURE_SUBSCRIPTION)
-                    backendAzureRmResourceGroupName: $(BACKEND_RG)
-                    backendAzureRmStorageAccountName: $(BACKEND_SA)
-                    backendAzureRmContainerName: "tfstate"
-                    backendAzureRmKey: $(STATE_KEY)
+      - job: deploy_flex_function
+        displayName: "Deploy to Flex Consumption"
+        steps:
 
-                - task: TerraformTask@5
-                  displayName: "Terraform Destroy"
-                  inputs:
-                    provider: "azurerm"
-                    command: "destroy"
-                    environmentServiceNameAzureRM: $(AZURE_SUBSCRIPTION)
-                    commandOptions: "-auto-approve"
+          - script: |
+              cd $(Build.SourcesDirectory)/function
+              zip -r ../function-src.zip function_app.py host.json requirements.txt
+            displayName: "Package Function Source (decorator model root layout)"
+
+          - script: |
+              echo "Resolved function_app_name = $(function_app_name)"
+            displayName: "DEBUG — Show resolved app name"
+
+          - task: AzureFunctionApp@2
+            displayName: "Deploy via remoteBuild"
+            inputs:
+              azureSubscription: $(AZURE_SUBSCRIPTION)
+              appType: functionAppLinux
+              appName: "$(function_app_name)"
+              package: "$(Build.SourcesDirectory)/function-src.zip"
+              deploymentMethod: remoteBuild
