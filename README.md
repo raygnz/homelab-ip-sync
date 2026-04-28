@@ -25,7 +25,26 @@
 - `outputs.tf`: Useful outputs such as resource names and endpoints.
 - `provider.tf`: Provider configuration for Azure, archive packaging, and random naming.
 - `backend.tf`: Remote state configuration for Terraform.
-- `function/`: Contains the Python Azure Function project, including `host.json`, `requirements.txt`, and the `ip_sync_timer/` function.
+- `function/`: Contains the Python Azure Function project, including `host.json`, `requirements.txt`, and `function_app.py` (Python v2 decorator model, all triggers in this file).
+## Azure Function App Settings & Environment Variables
+
+The following environment variables must be set for the Function App (managed by Terraform):
+
+- `SUBSCRIPTION_ID`: Azure subscription ID
+- `CF_ZONE_ID`: Cloudflare zone ID
+- `CF_RECORD_ID`: Cloudflare DNS record ID
+- `CF_API_TOKEN`: Cloudflare API token (injected from Key Vault)
+- `TARGET_STORAGE_ACCOUNTS`: JSON string mapping storage account names to resource group names
+- `TARGET_KEY_VAULT`: Name of the Key Vault to manage
+- `TARGET_KEY_VAULT_RG`: Resource group of the Key Vault
+- `FUNCTION_APP_NAME`: Name of the Function App
+- `RESOURCE_GROUP`: Resource group of the Function App
+
+**App Settings required for Flex Consumption Python v2:**
+- `FUNCTIONS_WORKER_RUNTIME=python`
+- `PYTHON_ISOLATE_WORKER_DEPENDENCIES=1`
+- `FUNCTIONS_EXTENSION_VERSION=~4`
+- `WEBSITE_RUN_FROM_PACKAGE=1`
 
 ## Prerequisites
 - Azure subscription with permissions to create resource groups, storage accounts, function apps, and Key Vault.
@@ -55,6 +74,11 @@
 - The function stores its last managed IP in the target storage account tag `homelab-ip-sync-last-ip` so it can replace only its own prior rule.
 
 ## Troubleshooting
+- If the function does not load or shows "0 functions found", check:
+   - All required environment variables are set and correctly named.
+   - The structure: all triggers must be in `function_app.py` at the root of the `function/` folder.
+   - Dependency issues: pin versions in `requirements.txt` if needed.
+   - App settings for Flex Consumption are present (see above).
 - Check the Azure Function App logs for errors if the firewall is not updating.
 - Ensure the Function App managed identity has the correct role assignment on the target storage account.
 - Verify that the Cloudflare API token is valid and has the required permissions.
