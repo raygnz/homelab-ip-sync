@@ -68,3 +68,8 @@ variable "cloudflare_record_id" {
   type        = string
   description = "Cloudflare DNS record ID"
 }
+
+variable "function_app_name" {
+  type        = string
+  description = "Name of the Azure Function App"
+}
