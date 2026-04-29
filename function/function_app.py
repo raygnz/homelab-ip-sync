@@ -69,6 +69,7 @@ def sync_cloudflare_ip(mytimer: func.TimerRequest) -> None:
     # --- Azure: authenticate using managed identity ---
     credential = DefaultAzureCredential()
 
+
     # --- Update firewall on each target storage account ---
     storage_client = StorageManagementClient(credential, subscription_id)
 
@@ -105,10 +106,31 @@ def sync_cloudflare_ip(mytimer: func.TimerRequest) -> None:
         except Exception as e:
             logging.error(f"{storage_account}: failed to update firewall: {e}")
 
+    # --- Ensure Key Vault public access mode is set to Deny (enables IP restrictions) ---
+    try:
+        kv_client = KeyVaultManagementClient(credential, subscription_id)
+        kv = kv_client.vaults.get(target_key_vault_rg, target_key_vault)
+        if not kv.properties.network_acls or kv.properties.network_acls.default_action != "Deny":
+            logging.info(f"{target_key_vault}: Setting default_action to Deny to enable IP restrictions")
+            kv_client.vaults.update(
+                target_key_vault_rg,
+                target_key_vault,
+                VaultPatch(
+                    properties={
+                        "networkAcls": {
+                            "defaultAction": "Deny",
+                            "bypass": "AzureServices",
+                            "ipRules": []
+                        }
+                    }
+                )
+            )
+    except Exception as e:
+        logging.error(f"{target_key_vault}: failed to set default_action to Deny: {e}")
+
     # --- Update Key Vault network ACL ---
     logging.info(f"Processing Key Vault: {target_key_vault} in {target_key_vault_rg}")
     try:
-        kv_client = KeyVaultManagementClient(credential, subscription_id)
         kv = kv_client.vaults.get(target_key_vault_rg, target_key_vault)
         kv_rules = kv.properties.network_acls.ip_rules if kv.properties.network_acls else []
         kv_current_ip = kv_rules[0].value.rstrip("/32") if kv_rules else None
@@ -121,24 +143,38 @@ def sync_cloudflare_ip(mytimer: func.TimerRequest) -> None:
                 target_key_vault_rg,
                 target_key_vault,
                 VaultPatch(
-                    properties=VaultProperties(
-                        network_acls=KVNetworkRuleSet(
-                            default_action="Deny",
-                            bypass="AzureServices",
-                            ip_rules=[KVIPRule(value=f"{resolved_ip}/32")],
-                        )
-                    )
-                ),
+                    properties={
+                        "networkAcls": {
+                            "defaultAction": "Deny",
+                            "bypass": "AzureServices",
+                            "ipRules": [{"value": f"{resolved_ip}/32"}]
+                        }
+                    }
+                )
             )
             logging.info(f"{target_key_vault}: updated firewall IP to {resolved_ip} with default_action Deny")
 
     except Exception as e:
         logging.error(f"{target_key_vault}: failed to update Key Vault firewall: {e}")
 
+    # --- Ensure Function App public network access is enabled (with restrictions) ---
+    logging.info(f"Ensuring Function App public network access is enabled for {function_app_name}")
+    try:
+        web_client = WebSiteManagementClient(credential, subscription_id)
+        site = web_client.web_apps.get(function_app_rg, function_app_name)
+        if getattr(site, 'public_network_access', None) != "Enabled":
+            web_client.web_apps.update(
+                function_app_rg,
+                function_app_name,
+                {"public_network_access": "Enabled"}
+            )
+            logging.info(f"{function_app_name}: Set public network access to Enabled")
+    except Exception as e:
+        logging.error(f"{function_app_name}: failed to set public network access: {e}")
+
     # --- Update Function App access restrictions ---
     logging.info(f"Processing Function App: {function_app_name} in {function_app_rg}")
     try:
-        web_client = WebSiteManagementClient(credential, subscription_id)
         config = web_client.web_apps.get_configuration(function_app_rg, function_app_name)
         restrictions = config.ip_security_restrictions or []
         current_restriction_ip = restrictions[0].ip_address if restrictions else None
