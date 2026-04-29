@@ -107,6 +107,8 @@ resource "azurerm_function_app_flex_consumption" "func" {
   }
 }
 
+
+
 # ---------------------------------------------------------
 # Role Assignments — managed identity on target storage accounts
 # ---------------------------------------------------------
@@ -135,7 +137,7 @@ resource "azurerm_role_assignment" "target_keyvault_network_contrib" {
 
 # Role on target Function App
 resource "azurerm_role_assignment" "target_func_network_contrib" {
-  scope                = data.azurerm_function_app_flex_consumption.target.id
+  scope                = azurerm_function_app_flex_consumption.func.id
   role_definition_name = "Contributor"
   principal_id         = azurerm_function_app_flex_consumption.func.identity[0].principal_id
 }

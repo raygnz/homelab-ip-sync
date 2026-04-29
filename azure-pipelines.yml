@@ -1,34 +1,32 @@
 trigger: none
 
-pool:
-  name: self-hosted-nuc
-  demands:
-    - Agent.OS -equals Linux
-
 variables:
   AZURE_SUBSCRIPTION: "AzureServiceConnection-SP"
   BACKEND_RG: "rg-homelab-backend-prod"
   BACKEND_SA: "sahomelabbackendprod"
   STATE_KEY: "homelab-ip-sync.tfstate"
+  APPROVER_EMAIL: "admin@rayg.nz" # Set this to the approver's email address
 
 stages:
-
-  # =========================================================
-  # Stage 1 — Terraform Infra
-  # =========================================================
-  - stage: Deploy
-    displayName: "Deploy IP Sync Infrastructure"
+  # ==========================================================
+  # Stage 1 — Terraform Plan (Apply)
+  # ==========================================================
+  - stage: Plan
+    displayName: "Terraform Plan"
     jobs:
-
-      - job: terraform_apply
-        displayName: "Terraform Apply"
+      - job: terraform_plan
+        displayName: "Terraform Plan"
+        pool:
+          name: self-hosted-nuc
+          demands:
+            - Agent.OS -equals Linux
         steps:
-
+          - checkout: self
           - task: TerraformInstaller@0
             inputs:
               terraformVersion: latest
-
           - task: TerraformTask@5
+            displayName: "Terraform Init"
             inputs:
               provider: azurerm
               command: init
@@ -38,16 +36,92 @@ stages:
               backendAzureRmContainerName: tfstate
               backendAzureRmKey: $(STATE_KEY)
               workingDirectory: "$(Build.SourcesDirectory)"
+          - task: AzureCLI@2
+            displayName: "Terraform Plan"
+            inputs:
+              azureSubscription: $(AZURE_SUBSCRIPTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              workingDirectory: "$(Build.SourcesDirectory)"
+              inlineScript: |
+                terraform plan -out=tfplan
+                terraform show -no-color tfplan > plan.txt
+          - publish: $(Build.SourcesDirectory)/plan.txt
+            artifact: terraform-plan
+          - publish: $(Build.SourcesDirectory)/tfplan
+            artifact: terraform-plan-binary
+          - publish: $(Build.SourcesDirectory)/.terraform.lock.hcl
+            artifact: terraform-lockfile
 
+  # ==========================================================
+  # Stage 2 — Manual Approval for Apply
+  # ==========================================================
+  - stage: ApproveApply
+    displayName: "Manual Approval for Apply"
+    dependsOn: Plan
+    jobs:
+      - job: waitForApproval
+        displayName: "Wait for Manual Approval"
+        pool: server
+        steps:
+          - task: ManualValidation@0
+            inputs:
+              notifyUsers: "$(APPROVER_EMAIL)"
+              instructions: "Review the Terraform plan artifact and approve to proceed with
+                apply."
+
+  # ==========================================================
+  # Stage 3 — Terraform Apply
+  # ==========================================================
+  - stage: Apply
+    displayName: "Terraform Apply"
+    dependsOn: ApproveApply
+    jobs:
+      - job: terraform_apply
+        displayName: "Terraform Apply"
+        pool:
+          name: self-hosted-nuc
+          demands:
+            - Agent.OS -equals Linux
+        steps:
+          - checkout: self
+          - download: current
+            artifact: terraform-plan
+          - download: current
+            artifact: terraform-lockfile
+          - task: TerraformInstaller@0
+            inputs:
+              terraformVersion: latest
+          - download: current
+            artifact: terraform-plan-binary
+          - script: |
+              cp $(Pipeline.Workspace)/terraform-lockfile/.terraform.lock.hcl $(Build.SourcesDirectory)/.terraform.lock.hcl
+              cp $(Pipeline.Workspace)/terraform-plan-binary/tfplan $(Build.SourcesDirectory)/tfplan
+            displayName: "Restore .terraform.lock.hcl and tfplan"
+          - script: |
+              echo "DEBUG: Listing files in $(Build.SourcesDirectory):"
+              ls -lA $(Build.SourcesDirectory)
+            displayName: "DEBUG — List files before terraform init"
           - task: TerraformTask@5
+            displayName: "Terraform Init"
             inputs:
               provider: azurerm
-              command: apply
+              command: init
               backendServiceArm: $(AZURE_SUBSCRIPTION)
-              environmentServiceNameAzureRM: $(AZURE_SUBSCRIPTION)
-              commandOptions: "-auto-approve"
+              backendAzureRmResourceGroupName: $(BACKEND_RG)
+              backendAzureRmStorageAccountName: $(BACKEND_SA)
+              backendAzureRmContainerName: tfstate
+              backendAzureRmKey: $(STATE_KEY)
               workingDirectory: "$(Build.SourcesDirectory)"
-
+          - task: AzureCLI@2
+            displayName: "Terraform Apply"
+            inputs:
+              azureSubscription: $(AZURE_SUBSCRIPTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              workingDirectory: "$(Build.SourcesDirectory)"
+              inlineScript: |
+                terraform apply -auto-approve tfplan
           - task: AzureCLI@2
             name: exportOutputs
             displayName: "Export Terraform Outputs"
@@ -61,28 +135,27 @@ stages:
                 echo "##vso[task.setvariable variable=function_app_name;isOutput=true]$APP_NAME"
                 echo "Exported function_app_name = $APP_NAME"
 
-  # =========================================================
-  # Stage 2 — Deploy Function Code
-  # =========================================================
+  # ==========================================================
+  # Stage 4 — Deploy Function Code
+  # ==========================================================
   - stage: DeployFunction
     displayName: "Deploy Function Code"
-    dependsOn: Deploy
-
+    dependsOn: Apply
     variables:
       function_app_name: $[
-        stageDependencies.Deploy.terraform_apply.outputs['exportOutputs.function_app_name']
+        stageDependencies.Apply.terraform_apply.outputs['exportOutputs.function_app_name']
         ]
-
     jobs:
-
       - job: deploy_flex_function
         displayName: "Deploy to Flex Consumption"
+        pool:
+          name: self-hosted-nuc
+          demands:
+            - Agent.OS -equals Linux
         steps:
-
           - script: |
               echo "Resolved function_app_name = $(function_app_name)"
             displayName: "DEBUG — Show resolved app name"
-
           - script: |
               curl -L https://github.com/Azure/azure-functions-core-tools/releases/download/4.0.6610/Azure.Functions.Cli.linux-x64.4.0.6610.zip -o /tmp/func.zip
               unzip -o /tmp/func.zip -d /tmp/func-cli
@@ -90,7 +163,6 @@ stages:
               chmod +x /tmp/func-cli/gozip
               echo "##vso[task.prependpath]/tmp/func-cli"
             displayName: "Install Azure Functions Core Tools"
-
           - task: AzureCLI@2
             displayName: "Deploy via func CLI"
             inputs:
@@ -99,6 +171,104 @@ stages:
               scriptLocation: inlineScript
               inlineScript: |
                 cd $(Build.SourcesDirectory)/function
-
                 func azure functionapp publish "$(function_app_name)" \
                   --python
+
+  # ==========================================================
+  # Stage 5 — Terraform Plan Destroy (optional)
+  # ==========================================================
+  - stage: PlanDestroy
+    displayName: "Terraform Plan Destroy"
+    jobs:
+      - job: terraform_plan_destroy
+        displayName: "Terraform Plan Destroy"
+        pool:
+          name: self-hosted-nuc
+          demands:
+            - Agent.OS -equals Linux
+        steps:
+          - checkout: self
+          - task: TerraformInstaller@0
+            inputs:
+              terraformVersion: latest
+          - task: TerraformTask@5
+            displayName: "Terraform Init"
+            inputs:
+              provider: azurerm
+              command: init
+              backendServiceArm: $(AZURE_SUBSCRIPTION)
+              backendAzureRmResourceGroupName: $(BACKEND_RG)
+              backendAzureRmStorageAccountName: $(BACKEND_SA)
+              backendAzureRmContainerName: tfstate
+              backendAzureRmKey: $(STATE_KEY)
+              workingDirectory: "$(Build.SourcesDirectory)"
+          - task: AzureCLI@2
+            displayName: "Terraform Plan Destroy"
+            inputs:
+              azureSubscription: $(AZURE_SUBSCRIPTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              workingDirectory: "$(Build.SourcesDirectory)"
+              inlineScript: |
+                terraform plan -destroy -out=tfplan-destroy
+                terraform show -no-color tfplan-destroy > plan-destroy.txt
+          - publish: $(Build.SourcesDirectory)/plan-destroy.txt
+            artifact: terraform-plan-destroy
+
+  # ==========================================================
+  # Stage 6 — Manual Approval for Destroy (optional)
+  # ==========================================================
+  - stage: ApproveDestroy
+    displayName: "Manual Approval for Destroy"
+    dependsOn: PlanDestroy
+    jobs:
+      - job: waitForApprovalDestroy
+        displayName: "Wait for Manual Approval (Destroy)"
+        pool: server
+        steps:
+          - task: ManualValidation@0
+            inputs:
+              notifyUsers: "$(APPROVER_EMAIL)"
+              instructions: "Review the Terraform destroy plan artifact and approve to proceed
+                with destroy."
+
+  # ==========================================================
+  # Stage 7 — Terraform Destroy (optional)
+  # ==========================================================
+  - stage: Destroy
+    displayName: "Terraform Destroy"
+    dependsOn: ApproveDestroy
+    jobs:
+      - job: terraform_destroy
+        displayName: "Terraform Destroy"
+        pool:
+          name: self-hosted-nuc
+          demands:
+            - Agent.OS -equals Linux
+        steps:
+          - checkout: self
+          - download: current
+            artifact: terraform-plan-destroy
+          - task: TerraformInstaller@0
+            inputs:
+              terraformVersion: latest
+          - task: TerraformTask@5
+            displayName: "Terraform Init"
+            inputs:
+              provider: azurerm
+              command: init
+              backendServiceArm: $(AZURE_SUBSCRIPTION)
+              backendAzureRmResourceGroupName: $(BACKEND_RG)
+              backendAzureRmStorageAccountName: $(BACKEND_SA)
+              backendAzureRmContainerName: tfstate
+              backendAzureRmKey: $(STATE_KEY)
+              workingDirectory: "$(Build.SourcesDirectory)"
+          - task: AzureCLI@2
+            displayName: "Terraform Destroy"
+            inputs:
+              azureSubscription: $(AZURE_SUBSCRIPTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              workingDirectory: "$(Build.SourcesDirectory)"
+              inlineScript: |
+                terraform apply -auto-approve tfplan-destroy
