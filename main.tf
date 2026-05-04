@@ -17,6 +17,11 @@ resource "azurerm_storage_account" "func_sa" {
   account_replication_type = "LRS"
   account_kind             = "StorageV2"
   min_tls_version          = "TLS1_2"
+  network_rules {
+    default_action = "Allow"
+    bypass         = ["AzureServices"]
+    # No ip_rules or virtual_network_subnet_ids, so all networks are allowed
+  }
 }
 
 # ---------------------------------------------------------
@@ -122,7 +127,10 @@ resource "azurerm_role_assignment" "func_sa_network_contrib" {
 
 # Roles on any additional target storage accounts from the map variable
 resource "azurerm_role_assignment" "target_storage_network_contrib" {
-  for_each             = data.azurerm_storage_account.target
+  for_each = {
+    for k, v in data.azurerm_storage_account.target : k => v
+    if k != azurerm_storage_account.func_sa.name
+  }
   scope                = each.value.id
   role_definition_name = "Storage Account Contributor"
   principal_id         = azurerm_function_app_flex_consumption.func.identity[0].principal_id
