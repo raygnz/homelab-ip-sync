@@ -79,6 +79,24 @@ def sync_cloudflare_ip(mytimer: func.TimerRequest) -> None:
             sa = storage_client.storage_accounts.get_properties(resource_group, storage_account)
             rules = sa.network_rule_set.ip_rules or []
 
+            # Enable firewall if not already enabled (default_action != Deny)
+            if sa.network_rule_set.default_action != "Deny":
+                logging.info(f"{storage_account}: Firewall not enabled (default_action={sa.network_rule_set.default_action}), enabling now.")
+                storage_client.storage_accounts.update(
+                    resource_group,
+                    storage_account,
+                    StorageAccountUpdateParameters(
+                        network_rule_set=NetworkRuleSet(
+                            ip_rules=[],
+                            default_action="Deny",
+                            bypass=sa.network_rule_set.bypass,
+                        )
+                    ),
+                )
+                # Re-fetch properties after enabling firewall
+                sa = storage_client.storage_accounts.get_properties(resource_group, storage_account)
+                rules = sa.network_rule_set.ip_rules or []
+
             if len(rules) > 1:
                 logging.warning(
                     f"{storage_account}: {len(rules)} IP rules found — only the first is managed by this function"
@@ -87,8 +105,8 @@ def sync_cloudflare_ip(mytimer: func.TimerRequest) -> None:
             current_ip = rules[0].ip_address_or_range if rules else None
             logging.info(f"{storage_account}: current firewall IP: {current_ip}")
 
-            if current_ip == resolved_ip and sa.network_rule_set.default_action == "Deny":
-                logging.info(f"{storage_account}: IP unchanged and default action is Deny, no update needed")
+            if current_ip == resolved_ip:
+                logging.info(f"{storage_account}: IP unchanged, no update needed")
             else:
                 storage_client.storage_accounts.update(
                     resource_group,
