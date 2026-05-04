@@ -9,7 +9,7 @@ from azure.mgmt.keyvault import KeyVaultManagementClient
 from azure.mgmt.keyvault.models import (
     IPRule as KVIPRule,
     NetworkRuleSet as KVNetworkRuleSet,
-    VaultPatch,
+    VaultPatchParameters,
     VaultProperties,
 )
 from azure.mgmt.storage import StorageManagementClient
@@ -77,11 +77,12 @@ def sync_cloudflare_ip(mytimer: func.TimerRequest) -> None:
         logging.info(f"Processing storage account: {storage_account} in {resource_group}")
         try:
             sa = storage_client.storage_accounts.get_properties(resource_group, storage_account)
-            rules = sa.network_rule_set.ip_rules or []
+            nrs = getattr(sa, "network_rule_set", None)
+            rules = nrs.ip_rules if nrs and nrs.ip_rules else []
 
             # Enable firewall if not already enabled (default_action != Deny)
-            if sa.network_rule_set.default_action != "Deny":
-                logging.info(f"{storage_account}: Firewall not enabled (default_action={sa.network_rule_set.default_action}), enabling now.")
+            if not nrs or getattr(nrs, "default_action", None) != "Deny":
+                logging.info(f"{storage_account}: Firewall not enabled (default_action={getattr(nrs, 'default_action', None)}), enabling now.")
                 storage_client.storage_accounts.update(
                     resource_group,
                     storage_account,
@@ -89,13 +90,14 @@ def sync_cloudflare_ip(mytimer: func.TimerRequest) -> None:
                         network_rule_set=NetworkRuleSet(
                             ip_rules=[],
                             default_action="Deny",
-                            bypass=sa.network_rule_set.bypass,
+                            bypass=getattr(nrs, "bypass", None),
                         )
                     ),
                 )
                 # Re-fetch properties after enabling firewall
                 sa = storage_client.storage_accounts.get_properties(resource_group, storage_account)
-                rules = sa.network_rule_set.ip_rules or []
+                nrs = getattr(sa, "network_rule_set", None)
+                rules = nrs.ip_rules if nrs and nrs.ip_rules else []
 
             if len(rules) > 1:
                 logging.warning(
@@ -115,7 +117,7 @@ def sync_cloudflare_ip(mytimer: func.TimerRequest) -> None:
                         network_rule_set=NetworkRuleSet(
                             ip_rules=[IPRule(ip_address_or_range=resolved_ip, action="Allow")],
                             default_action="Deny",
-                            bypass=sa.network_rule_set.bypass,
+                            bypass=getattr(nrs, "bypass", None),
                         )
                     ),
                 )
@@ -125,22 +127,23 @@ def sync_cloudflare_ip(mytimer: func.TimerRequest) -> None:
             logging.error(f"{storage_account}: failed to update firewall: {e}")
 
     # --- Ensure Key Vault public access mode is set to Deny (enables IP restrictions) ---
+    kv_client = KeyVaultManagementClient(credential, subscription_id)
     try:
-        kv_client = KeyVaultManagementClient(credential, subscription_id)
         kv = kv_client.vaults.get(target_key_vault_rg, target_key_vault)
-        if not kv.properties.network_acls or kv.properties.network_acls.default_action != "Deny":
+        nacls = getattr(kv.properties, "network_acls", None)
+        if not nacls or getattr(nacls, "default_action", None) != "Deny":
             logging.info(f"{target_key_vault}: Setting default_action to Deny to enable IP restrictions")
             kv_client.vaults.update(
                 target_key_vault_rg,
                 target_key_vault,
-                VaultPatch(
-                    properties={
-                        "networkAcls": {
-                            "defaultAction": "Deny",
-                            "bypass": "AzureServices",
-                            "ipRules": []
-                        }
-                    }
+                VaultPatchParameters(
+                    properties=VaultProperties(
+                        network_acls=KVNetworkRuleSet(
+                            default_action="Deny",
+                            bypass="AzureServices",
+                            ip_rules=[]
+                        )
+                    )
                 )
             )
     except Exception as e:
@@ -150,24 +153,25 @@ def sync_cloudflare_ip(mytimer: func.TimerRequest) -> None:
     logging.info(f"Processing Key Vault: {target_key_vault} in {target_key_vault_rg}")
     try:
         kv = kv_client.vaults.get(target_key_vault_rg, target_key_vault)
-        kv_rules = kv.properties.network_acls.ip_rules if kv.properties.network_acls else []
+        nacls = getattr(kv.properties, "network_acls", None)
+        kv_rules = nacls.ip_rules if nacls and nacls.ip_rules else []
         kv_current_ip = kv_rules[0].value.rstrip("/32") if kv_rules else None
         logging.info(f"{target_key_vault}: current firewall IP: {kv_current_ip}")
 
-        if kv_current_ip == resolved_ip and kv.properties.network_acls.default_action == "Deny":
+        if kv_current_ip == resolved_ip and getattr(nacls, "default_action", None) == "Deny":
             logging.info(f"{target_key_vault}: IP unchanged and default action is Deny, no update needed")
         else:
             kv_client.vaults.update(
                 target_key_vault_rg,
                 target_key_vault,
-                VaultPatch(
-                    properties={
-                        "networkAcls": {
-                            "defaultAction": "Deny",
-                            "bypass": "AzureServices",
-                            "ipRules": [{"value": f"{resolved_ip}/32"}]
-                        }
-                    }
+                VaultPatchParameters(
+                    properties=VaultProperties(
+                        network_acls=KVNetworkRuleSet(
+                            default_action="Deny",
+                            bypass="AzureServices",
+                            ip_rules=[KVIPRule(value=f"{resolved_ip}/32")]
+                        )
+                    )
                 )
             )
             logging.info(f"{target_key_vault}: updated firewall IP to {resolved_ip} with default_action Deny")
@@ -177,15 +181,12 @@ def sync_cloudflare_ip(mytimer: func.TimerRequest) -> None:
 
     # --- Ensure Function App public network access is enabled (with restrictions) ---
     logging.info(f"Ensuring Function App public network access is enabled for {function_app_name}")
+    web_client = WebSiteManagementClient(credential, subscription_id)
     try:
-        web_client = WebSiteManagementClient(credential, subscription_id)
         site = web_client.web_apps.get(function_app_rg, function_app_name)
         if getattr(site, 'public_network_access', None) != "Enabled":
-            web_client.web_apps.update(
-                function_app_rg,
-                function_app_name,
-                {"public_network_access": "Enabled"}
-            )
+            site.public_network_access = "Enabled"
+            web_client.web_apps.create_or_update(function_app_rg, function_app_name, site)
             logging.info(f"{function_app_name}: Set public network access to Enabled")
     except Exception as e:
         logging.error(f"{function_app_name}: failed to set public network access: {e}")
@@ -201,20 +202,19 @@ def sync_cloudflare_ip(mytimer: func.TimerRequest) -> None:
         if current_restriction_ip == f"{resolved_ip}/32":
             logging.info(f"{function_app_name}: IP unchanged, no update needed")
         else:
+            config.ip_security_restrictions = [
+                IpSecurityRestriction(
+                    ip_address=f"{resolved_ip}/32",
+                    action="Allow",
+                    priority=100,
+                    name="cloudflare-home-ip",
+                )
+            ]
+            config.ip_security_restrictions_default_action = "Deny"
             web_client.web_apps.update_configuration(
                 function_app_rg,
                 function_app_name,
-                SiteConfig(
-                    ip_security_restrictions=[
-                        IpSecurityRestriction(
-                            ip_address=f"{resolved_ip}/32",
-                            action="Allow",
-                            priority=100,
-                            name="cloudflare-home-ip",
-                        )
-                    ],
-                    ip_security_restrictions_default_action="Deny",
-                )
+                config
             )
             logging.info(f"{function_app_name}: updated access restriction IP to {resolved_ip}")
 
