@@ -70,10 +70,15 @@ def sync_cloudflare_ip(mytimer: func.TimerRequest) -> None:
     credential = DefaultAzureCredential()
 
 
-    # --- Update firewall on each target storage account ---
+    # --- Update firewall only on tfstate storage account (not function app's own storage) ---
     storage_client = StorageManagementClient(credential, subscription_id)
 
     for storage_account, resource_group in target_storage_accounts.items():
+        # Skip the function app's own storage account
+        if storage_account == os.environ.get("AzureWebJobsStorageAccountName"):
+            logging.info(f"Skipping network restriction update for function app's own storage account: {storage_account}")
+            continue
+
         logging.info(f"Processing storage account: {storage_account} in {resource_group}")
         try:
             sa = storage_client.storage_accounts.get_properties(resource_group, storage_account)

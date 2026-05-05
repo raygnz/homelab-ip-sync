@@ -101,6 +101,7 @@ resource "azurerm_function_app_flex_consumption" "func" {
 
   app_settings = {
     "PYTHONPATH"              = "/home/site/wwwroot/.python_packages/lib/site-packages"
+    "FUNCTION_APP_NAME"       = "sync_cloudflare_ip"
     "SUBSCRIPTION_ID"         = var.subscription_id
     "TARGET_STORAGE_ACCOUNTS" = jsonencode(var.target_storage_accounts)
     "TARGET_KEY_VAULT"        = var.target_key_vault_name
