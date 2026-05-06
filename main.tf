@@ -100,16 +100,17 @@ resource "azurerm_function_app_flex_consumption" "func" {
   site_config {}
 
   app_settings = {
-    "PYTHONPATH"              = "/home/site/wwwroot/.python_packages/lib/site-packages"
-    "FUNCTION_APP_NAME"       = "sync_cloudflare_ip"
-    "SUBSCRIPTION_ID"         = var.subscription_id
-    "TARGET_STORAGE_ACCOUNTS" = jsonencode(var.target_storage_accounts)
-    "TARGET_KEY_VAULT"        = var.target_key_vault_name
-    "TARGET_KEY_VAULT_RG"     = var.target_key_vault_resource_group_name
-    "RESOURCE_GROUP"          = azurerm_resource_group.rg.name
-    "CF_ZONE_ID"              = var.cloudflare_zone_id
-    "CF_RECORD_ID"            = var.cloudflare_record_id
-    "CF_API_TOKEN"            = data.azurerm_key_vault_secret.cloudflare_token.value
+    "PYTHONPATH"                = "/home/site/wwwroot/.python_packages/lib/site-packages"
+    "FUNCTION_APP_NAME"         = "sync_cloudflare_ip"
+    "SUBSCRIPTION_ID"           = var.subscription_id
+    "FUNC_STORAGE_ACCOUNT_NAME" = azurerm_storage_account.func_sa.name
+    "TARGET_STORAGE_ACCOUNTS"   = jsonencode(var.target_storage_accounts)
+    "TARGET_KEY_VAULT"          = var.target_key_vault_name
+    "TARGET_KEY_VAULT_RG"       = var.target_key_vault_resource_group_name
+    "RESOURCE_GROUP"            = azurerm_resource_group.rg.name
+    "CF_ZONE_ID"                = var.cloudflare_zone_id
+    "CF_RECORD_ID"              = var.cloudflare_record_id
+    "CF_API_TOKEN"              = data.azurerm_key_vault_secret.cloudflare_token.value
   }
 }
 
