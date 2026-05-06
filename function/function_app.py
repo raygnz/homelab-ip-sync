@@ -39,6 +39,7 @@ def sync_cloudflare_ip(mytimer: func.TimerRequest) -> None:
     cf_record_id = os.environ["CF_RECORD_ID"]
     cf_api_token = os.environ["CF_API_TOKEN"]
     target_storage_accounts = json.loads(os.environ["TARGET_STORAGE_ACCOUNTS"])
+    func_storage_account_name = os.environ.get("FUNC_STORAGE_ACCOUNT_NAME")
     target_key_vault = os.environ["TARGET_KEY_VAULT"]
     target_key_vault_rg = os.environ["TARGET_KEY_VAULT_RG"]
     function_app_name = os.environ["FUNCTION_APP_NAME"]
@@ -74,9 +75,9 @@ def sync_cloudflare_ip(mytimer: func.TimerRequest) -> None:
     storage_client = StorageManagementClient(credential, subscription_id)
 
     for storage_account, resource_group in target_storage_accounts.items():
-        # Skip the function app's own storage account
-        if storage_account == os.environ.get("AzureWebJobsStorageAccountName"):
-            logging.info(f"Skipping network restriction update for function app's own storage account: {storage_account}")
+        # Skip the function app's own storage account for ALL network/firewall/public access changes
+        if func_storage_account_name and storage_account == func_storage_account_name:
+            logging.info(f"Skipping ALL network/public access changes for function app's own storage account: {storage_account}")
             continue
 
         logging.info(f"Processing storage account: {storage_account} in {resource_group}")
