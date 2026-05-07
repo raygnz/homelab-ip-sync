@@ -1,0 +1,241 @@
+# azure-pipelines.yml.template
+# Generic Azure DevOps pipeline for Terraform deployments with manual approval gates. This template can be used for both apply and destroy workflows by adjusting the stages and parameters as needed.
+
+trigger: none
+
+parameters:
+  - name: azureSubscription
+    displayName: Azure Service Connection Name
+    type: string
+    default: 'AzureServiceConnection'
+  - name: backendResourceGroup
+    displayName: Terraform State Resource Group
+    type: string
+    default: 'REPLACE_ME'
+  - name: backendStorageAccount
+    displayName: Terraform State Storage Account
+    type: string
+    default: 'REPLACE_ME'
+  - name: backendContainer
+    displayName: Terraform State Blob Container
+    type: string
+    default: 'tfstate'
+  - name: backendKey
+    displayName: Terraform State Key
+    type: string
+    default: 'terraform.tfstate'
+  - name: approverEmail
+    displayName: Manual Approval Email
+    type: string
+    default: 'admin@rayg.nz'
+  - name: functionProjectPath
+    displayName: Path to Function App Code
+    type: string
+    default: 'function'
+
+variables:
+  AZURE_SUBSCRIPTION: ${{ parameters.azureSubscription }}
+  BACKEND_RG: ${{ parameters.backendResourceGroup }}
+  BACKEND_SA: ${{ parameters.backendStorageAccount }}
+  BACKEND_CONTAINER: ${{ parameters.backendContainer }}
+  STATE_KEY: ${{ parameters.backendKey }}
+  APPROVER_EMAIL: ${{ parameters.approverEmail }}
+  FUNCTION_PROJECT_PATH: ${{ parameters.functionProjectPath }}
+
+  # ==========================================================
+  # Stage 1 — Terraform Plan
+  # ==========================================================
+stages:
+  - stage: Plan
+    displayName: "Terraform Plan"
+    jobs:
+      - job: terraform_plan
+        displayName: "Terraform Plan"
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - checkout: self
+          - task: TerraformInstaller@0
+            inputs:
+              terraformVersion: latest
+          - task: TerraformTask@5
+            displayName: "Terraform Init"
+            inputs:
+              provider: azurerm
+              command: init
+              backendServiceArm: $(AZURE_SUBSCRIPTION)
+              backendAzureRmResourceGroupName: $(BACKEND_RG)
+              backendAzureRmStorageAccountName: $(BACKEND_SA)
+              backendAzureRmContainerName: $(BACKEND_CONTAINER)
+              backendAzureRmKey: $(STATE_KEY)
+              workingDirectory: "$(Build.SourcesDirectory)"
+          - script: |
+              terraform plan -out=tfplan
+              terraform show -no-color tfplan > plan.txt
+            displayName: "Terraform Plan"
+          - publish: $(Build.SourcesDirectory)/plan.txt
+            artifact: terraform-plan
+          - publish: $(Build.SourcesDirectory)/tfplan
+            artifact: terraform-plan-binary
+          - publish: $(Build.SourcesDirectory)/.terraform.lock.hcl
+            artifact: terraform-lockfile
+  # ==========================================================
+  # Stage 2 — Manual Approval for Apply
+  # ==========================================================
+  - stage: ApproveApply
+    displayName: "Manual Approval for Apply"
+    dependsOn: Plan
+    jobs:
+      - job: waitForApproval
+        displayName: "Wait for Manual Approval"
+        pool: server
+        steps:
+          - task: ManualValidation@0
+            inputs:
+              notifyUsers: "$(APPROVER_EMAIL)"
+              instructions: "Review the Terraform plan artifact and approve to proceed with apply."
+
+  # ==========================================================
+  # Stage 3 — Terraform Apply
+  # ==========================================================
+  - stage: Apply
+    displayName: "Terraform Apply"
+    dependsOn: ApproveApply
+    jobs:
+      - job: terraform_apply
+        displayName: "Terraform Apply"
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - checkout: self
+          - download: current
+            artifact: terraform-plan
+          - download: current
+            artifact: terraform-lockfile
+          - task: TerraformInstaller@0
+            inputs:
+              terraformVersion: latest
+          - download: current
+            artifact: terraform-plan-binary
+          - script: |
+              cp $(Pipeline.Workspace)/terraform-lockfile/.terraform.lock.hcl $(Build.SourcesDirectory)/.terraform.lock.hcl
+              cp $(Pipeline.Workspace)/terraform-plan-binary/tfplan $(Build.SourcesDirectory)/tfplan
+            displayName: "Restore .terraform.lock.hcl and tfplan"
+          - task: TerraformTask@5
+            displayName: "Terraform Init"
+            inputs:
+              provider: azurerm
+              command: init
+              backendServiceArm: $(AZURE_SUBSCRIPTION)
+              backendAzureRmResourceGroupName: $(BACKEND_RG)
+              backendAzureRmStorageAccountName: $(BACKEND_SA)
+              backendAzureRmContainerName: $(BACKEND_CONTAINER)
+              backendAzureRmKey: $(STATE_KEY)
+              workingDirectory: "$(Build.SourcesDirectory)"
+          - script: |
+              terraform apply -auto-approve tfplan
+            displayName: "Terraform Apply"
+          - script: |
+              APP_NAME=$(terraform output -raw function_app_name)
+              echo "##vso[task.setvariable variable=function_app_name;isOutput=true]$APP_NAME"
+              echo "Exported function_app_name = $APP_NAME"
+            displayName: "Export Terraform Outputs"
+
+  # ==========================================================
+  # Stage 4 — Terraform Plan Destroy (optional)
+  # ==========================================================
+  - stage: PlanDestroy
+    displayName: "Terraform Plan Destroy"
+    jobs:
+      - job: terraform_plan_destroy
+        displayName: "Terraform Plan Destroy"
+        pool:
+          name: self-hosted-nuc
+          demands:
+            - Agent.OS -equals Linux
+        steps:
+          - checkout: self
+          - task: TerraformInstaller@0
+            inputs:
+              terraformVersion: latest
+          - task: TerraformTask@5
+            displayName: "Terraform Init"
+            inputs:
+              provider: azurerm
+              command: init
+              backendServiceArm: $(AZURE_SUBSCRIPTION)
+              backendAzureRmResourceGroupName: $(BACKEND_RG)
+              backendAzureRmStorageAccountName: $(BACKEND_SA)
+              backendAzureRmContainerName: tfstate
+              backendAzureRmKey: $(STATE_KEY)
+              workingDirectory: "$(Build.SourcesDirectory)"
+          - task: AzureCLI@2
+            displayName: "Terraform Plan Destroy"
+            inputs:
+              azureSubscription: $(AZURE_SUBSCRIPTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              workingDirectory: "$(Build.SourcesDirectory)"
+              inlineScript: |
+                terraform plan -destroy -out=tfplan-destroy
+                terraform show -no-color tfplan-destroy > plan-destroy.txt
+          - publish: $(Build.SourcesDirectory)/plan-destroy.txt
+            artifact: terraform-plan-destroy
+
+  # ==========================================================
+  # Stage 5 — Manual Approval for Destroy (optional)
+  # ==========================================================
+  - stage: ApproveDestroy
+    displayName: "Manual Approval for Destroy"
+    dependsOn: PlanDestroy
+    jobs:
+      - job: waitForApprovalDestroy
+        displayName: "Wait for Manual Approval (Destroy)"
+        pool: server
+        steps:
+          - task: ManualValidation@0
+            inputs:
+              notifyUsers: "$(APPROVER_EMAIL)"
+              instructions: "Review the Terraform destroy plan artifact and approve to proceed
+                with destroy."
+
+  # ==========================================================
+  # Stage 6 — Terraform Destroy (optional)
+  # ==========================================================
+  - stage: Destroy
+    displayName: "Terraform Destroy"
+    dependsOn: ApproveDestroy
+    jobs:
+      - job: terraform_destroy
+        displayName: "Terraform Destroy"
+        pool:
+          name: self-hosted-nuc
+          demands:
+            - Agent.OS -equals Linux
+        steps:
+          - checkout: self
+          - download: current
+            artifact: terraform-plan-destroy
+          - task: TerraformInstaller@0
+            inputs:
+              terraformVersion: latest
+          - task: TerraformTask@5
+            displayName: "Terraform Init"
+            inputs:
+              provider: azurerm
+              command: init
+              backendServiceArm: $(AZURE_SUBSCRIPTION)
+              backendAzureRmResourceGroupName: $(BACKEND_RG)
+              backendAzureRmStorageAccountName: $(BACKEND_SA)
+              backendAzureRmContainerName: tfstate
+              backendAzureRmKey: $(STATE_KEY)
+              workingDirectory: "$(Build.SourcesDirectory)"
+          - task: AzureCLI@2
+            displayName: "Terraform Destroy"
+            inputs:
+              azureSubscription: $(AZURE_SUBSCRIPTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              workingDirectory: "$(Build.SourcesDirectory)"
+              inlineScript: |
+                terraform apply -auto-approve tfplan-destroy
